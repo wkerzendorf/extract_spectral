@@ -4,6 +4,30 @@ from astropy.modeling.models import Polynomial1D, Gaussian1D, Chebyshev1D
 from scipy import optimize
 
 
+
+from warnings import warn
+
+import numpy as np
+#from scipy.linalg.fblas import dgemm
+
+
+class FastNNLS(object):
+
+    def __init__(self, n, m):
+        #m, n = A.shape
+        self.n, self.m = n, m
+        self.w = np.zeros((n,), dtype=np.double)
+        self.zz = np.zeros((m,), dtype=np.double)
+        self.index = np.zeros((n,), dtype=np.int)
+
+    def __call__(self, A, b):
+        self.w[...] = 0.0
+        self.zz[...] = 0.0
+        self.index[...] = 0
+        x, rnorm, mode = optimize._nnls.nnls(A, self.m, self.n, b, self.w, self.zz, self.index)
+        return x
+
+
 class ModelFrame2D(Model):
 
     inputs = ()
@@ -59,6 +83,11 @@ class LinearLstSqExtraction(Model):
         self.amplitude = np.ones(self.observed.shape[0]) * np.nan
         self.sky = np.ones(self.observed.shape[0]) * np.nan
 
+        self.fast_nnls = FastNNLS(2, observed.shape[1])
+        self.A = np.ones((2, self.observed.shape[1]))
+        self.lstsq_slv = self.fast_nnls
+        #self.lstsq_slv = lambda A, b: np.linalg.lstsq(A, b)[0]
+
     def evaluate(self, frame):
         if frame.ndim == 3:
             frame = np.squeeze(frame)
@@ -66,10 +95,11 @@ class LinearLstSqExtraction(Model):
         sky_model = np.ones(frame.shape[1])
 
         for i in xrange(frame.shape[0]):
-            synth_row = frame[i]
             observed_row = self.observed[i]
-            A = np.vstack((synth_row, sky_model)).T
-            amplitude, sky =  optimize.nnls(A, observed_row)[0]
+            self.A[0] = frame[i]
+            amplitude, sky =  self.lstsq_slv(self.A.T, observed_row)
+
+            #amplitude, sky =  np.linalg.lstsq(self.A.T, observed_row)[0]
             #amplitude = 0. if np.isinf(amplitude) else amplitude
             frame_output[i] = amplitude * frame[i] + sky
             self.amplitude[i] = amplitude
